@@ -11,6 +11,7 @@ use std::ffi::{OsStr, OsString};
 use std::format;
 use std::io::{Error, ErrorKind, IoSlice, Read, Result, Write};
 use std::net::TcpStream;
+use std::path::Path;
 use std::process::{Child, Command};
 
 use zerocopy::network_endian::U32;
@@ -627,13 +628,14 @@ pub struct TcpSimulator {
 
 impl TcpSimulator {
     /// Starts the TPM simulator binary with the given arguments and connects to it.
-    pub fn new<B: AsRef<OsStr>, A: AsRef<OsStr>>(
+    pub fn new<B: AsRef<OsStr>, A: AsRef<OsStr>, P: AsRef<Path>>(
         bin: B,
         args: &[A],
+        cwd: P,
         ip: &str,
     ) -> Result<TcpSimulator> {
         let mut command = Command::new(bin.as_ref());
-        command.current_dir("/");
+        command.current_dir(&cwd);
         if !args.is_empty() {
             command.args(args);
         }
@@ -659,9 +661,39 @@ impl TcpSimulator {
             ))
         })?;
 
-        let conn = TcpConnection::connect_with_retries(ip, None, None)?;
+        // The TCG TPM simulator writes the ports it uses to two files:
+        //   - TPM port: "command.port"
+        //   - Platform port: "platform.port"
+        let tpm_port = Self::read_port_from_file_with_retries(&cwd.as_ref().join("command.port"))?;
+        let plat_port =
+            Self::read_port_from_file_with_retries(&cwd.as_ref().join("platform.port"))?;
+
+        let conn = TcpConnection::connect_with_retries(ip, Some(tpm_port), Some(plat_port))?;
 
         Ok(TcpSimulator { child, conn })
+    }
+
+    /// Reads a port from a file with retires.
+    fn read_port_from_file_with_retries(path: &Path) -> Result<u16> {
+        let mut attempts = 0;
+        loop {
+            attempts += 1;
+            match std::fs::read_to_string(path) {
+                Ok(port_str) => {
+                    let port = port_str
+                        .trim()
+                        .parse::<u16>()
+                        .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+                    return Ok(port);
+                }
+                Err(err) => {
+                    if attempts > 3 {
+                        return Err(err);
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
+            }
+        }
     }
 
     /// Stops the TPM simulator process.

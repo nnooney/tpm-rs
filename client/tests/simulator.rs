@@ -9,6 +9,7 @@
 /// These tests must be run with `--test-threads=1`, because they use a single TCP port.
 use std::io::Result;
 
+use tempfile::tempdir;
 use tpm2_rs_base::commands::StartupCmd;
 use tpm2_rs_base::constants::TpmSu;
 use tpm2_rs_client::connection::TcpSimulator;
@@ -55,7 +56,7 @@ fn get_simulator_path() -> String {
 const ENV_VAR_SIMULATOR_ARGS: &str = "SIMULATOR_ARGS";
 
 /// Default arguments to pass to the TPM simulator.
-const DEFAULT_SIMULATOR_ARGS: &str = "";
+const DEFAULT_SIMULATOR_ARGS: &str = "--pick_ports";
 
 /// Get the arguments to pass to the TPM simulator. Set the environment
 /// variable at the command line to specify different arguments, e.g.
@@ -73,9 +74,11 @@ fn get_simulator_args() -> Vec<String> {
 
 /// Convenience function to spawn a TPM simulator and establish a TCP connection.
 pub fn spawn_simulator_and_connect() -> Result<TcpSimulator> {
+    let tempdir = tempdir()?;
     let mut simulator = TcpSimulator::new(
         get_simulator_path(),
         get_simulator_args().as_slice(),
+        tempdir.keep(), // cwd
         &get_simulator_ip(),
     )?;
     simulator.connection_mut().reinit()?;
